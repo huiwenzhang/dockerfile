@@ -4,5 +4,6 @@ docker run -it  --privileged    \
  --env="DISPLAY" --env QT_X11_NO_MITSHM=1  \
  --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
  --volume="/home/huiwen/Workspace/gazebo_models:/home/ros/.gazebo/models:rw" \
+ --volume="/home/huiwen/Worspace:/data:rw"\
  --name="tiago-learn" \
  jacknlliu/tiago-ros:indigo tmux
