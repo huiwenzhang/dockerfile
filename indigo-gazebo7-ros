@@ -1,0 +1,171 @@
+FROM jacknlliu/ubuntu-init:14.04.5
+
+LABEL maintainer="alvin <alvin.hw.zhang@gmail.com>"
+
+# setup environment
+ENV DEBIAN_FRONTEND noninteractive
+ENV ROS_DISTRO indigo
+
+# setup locale
+RUN locale-gen en_US.UTF-8
+ENV LANG en_US.UTF-8
+
+# install tiago dependencies
+RUN  apt-get update -y && apt-get upgrade -y -q --no-install-recommends \
+    && apt-get install -y -q --no-install-recommends software-properties-common \
+    && add-apt-repository --yes ppa:xqms/opencv-nonfree  \
+    && apt-get update -y -q \
+    && apt-get install -y -q --no-install-recommends libopencv-nonfree-dev
+
+# setup sources.list
+RUN echo "deb http://packages.ros.org/ros/ubuntu $(lsb_release -sc) main" > /etc/apt/sources.list.d/ros-latest.list \
+    \
+# setup keys
+    && apt-key adv --keyserver hkp://pgp.mit.edu:80 --recv-key 421C365BD9FF1F717815A3895523BAEEB01FA116 \
+    \
+# update the repository and install ros packages
+    && apt-get update -y \
+    && apt-get install -y -q --no-install-recommends apt-utils apt-transport-https aptitude \
+    && aptitude install -y -q -R ros-indigo-desktop-full python-rosinstall python-catkin-tools ninja-build python3-pip python3-setuptools
+
+
+# remove default gazebo2 and replace it with gazebo
+RUN  echo "deb http://packages.osrfoundation.org/gazebo/ubuntu ${lsb_release -sc} main\" > /etc/apt/sources.list.d/gazebo-latest.list \
+    && wget --quiet http://packages.osrfoundation.org/gazebo.key -O - |  apt-key add - \
+    && apt-get remove gazebo2* \
+    && apt-get update -q \
+    && apt-get install gazebo7 libgazebo7-dev \
+    && apt-get install ros-indigo-gazebo7-ros-pkgs
+    
+ # install essential tools
+RUN aptitude install -y -q -R  bash-completion wget vim git iputils-ping iproute2 netcat tmux terminator supervisor xauth openssh-server sudo pcmanfm \
+    \
+# install additional build tool
+    && aptitude install -y -q -R build-essential gdb \
+    \
+# install IDE essential packages
+    && aptitude install -y -q -R mesa-common-dev libglu1-mesa-dev libfontconfig1 qt5-default qtcreator qtdeclarative5-qtquick2-plugin \
+    \
+# setup ssh
+    && mkdir -p /var/run/sshd && echo "X11UseLocalhost no" >> /etc/ssh/sshd_config
+
+# install intel graphics driver
+RUN aptitude install -y -q -R libgl1-mesa-glx libgl1-mesa-dri \
+    \
+# install amd graphics open source driver
+    && aptitude install -y -q -R mesa-vdpau-drivers xserver-xorg-video-ati mesa-utils module-init-tools \
+# we should fix AMD graphics driver with image driver extension not found in ubuntu 14.04.2, refrence: https://wiki.ubuntu.com/Kernel/LTSEnablementStack#Ubuntu_14.04_LTS_-_Trusty_Tahr
+    \
+    && aptitude install -y -q -R linux-generic-lts-xenial xserver-xorg-core-lts-xenial xserver-xorg-lts-xenial xserver-xorg-video-all-lts-xenial xserver-xorg-input-all-lts-xenial libwayland-egl1-mesa-lts-xenial
+
+
+# install ros related components
+RUN aptitude install -y -q -R ros-indigo-moveit-full \
+    ros-indigo-gazebo-ros-control \
+    ros-indigo-ros-controllers \
+    ros-indigo-controller-manager \
+    ros-indigo-rqt-controller-manager \
+    ros-indigo-ur-description \
+    ros-indigo-camera-calibration \
+    ros-indigo-camera-calibration-parsers \
+    ros-indigo-camera-info-manager \
+    ros-indigo-twist-mux ros-indigo-joy ros-indigo-joy-teleop \
+    ros-indigo-teleop-tools ros-indigo-control-toolbox ros-indigo-sound-play \
+    ros-indigo-navigation ros-indigo-eband-local-planner \
+    ros-indigo-depthimage-to-laserscan  ros-indigo-openslam-gmapping \
+    ros-indigo-gmapping ros-indigo-moveit-commander \
+    ros-indigo-geometry-experimental \
+    \
+# install orocos rtt components
+    && aptitude install -y -q -R ros-indigo-orocos-kdl ros-indigo-rtt ~nros-indigo-rtt-*
+
+
+# install RoboWare
+RUN aptitude install -y -q -R  wget python-pip pylint clang libxss1 libnss3 libnotify4 libxtst6 ~nlibgconf-2 \
+    && export ROBOWAREVERSION="1.1.0-1514335284"  \
+    && wget https://github.com/tonyrobotics/RoboWare/raw/master/Studio/roboware-studio_${ROBOWAREVERSION}_amd64.deb -O roboware_amd64.deb \
+    && chmod a+x roboware_amd64.deb && dpkg -i roboware_amd64.deb \
+    && apt-get install -y --no-install-recommends -f \
+    && rm -f roboware_amd64.deb
+
+# copy entrypoint file
+COPY ./scripts/ros_entrypoint.sh /
+COPY ./scripts/containerinit.sh /etc/my_init.d/
+RUN chmod +x /ros_entrypoint.sh && chmod +x /etc/my_init.d/containerinit.sh
+
+
+# set user ros and sudo
+RUN adduser --gecos "ROS User" --home /home/ros --disabled-password ros && \
+    usermod -a -G dialout ros && \
+    echo "ros ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/99_aptget
+
+# switch to user ros, but the workdir is still /, not /home/ros
+USER ros
+
+# setup ros env
+RUN sudo rosdep init && rosdep update  \
+    && echo "source "/opt/ros/$ROS_DISTRO/setup.bash"" >> /home/ros/.bashrc
+
+# configure Qt
+RUN mkdir -p /home/ros/.config/QtProject
+
+USER root
+
+COPY ./config/QtCreator.ini  /home/ros/.config/QtProject/
+RUN chown -R ros:ros  /home/ros/.config/
+
+# config gazebo volume
+RUN mkdir -p /home/ros/.gazebo/models && chown -R ros:ros /home/ros/.gazebo
+
+# share this volume with other containers from this image
+VOLUME ["/home/ros/.gazebo/models"]
+
+# install tiago-ros dependencies
+RUN aptitude install -y -q -R ros-indigo-sick-tim ros-indigo-humanoid-nav-msgs ros-indigo-hokuyo-node
+
+USER ros
+# install tiago sdk following http://wiki.ros.org/Robots/TIAGo/Tutorials/Installation/TiagoSimulation
+RUN mkdir -p /home/ros/Workspace/tiago_public_ws/src \
+    && chmod -R a+rwx /home/ros/Workspace/tiago_public_ws \
+    && cd /home/ros/Workspace/tiago_public_ws \
+    && wget -O tiago_public.rosinstall https://raw.githubusercontent.com/pal-robotics/tiago_tutorials/master/tiago_public.rosinstall \
+    && yes | rosinstall src /opt/ros/indigo tiago_public.rosinstall \
+    && /bin/bash -c "source /home/ros/Workspace/tiago_public_ws/src/setup.bash" \
+    && echo "source ~/Workspace/tiago_public_ws/src/setup.bash" >> /home/ros/.bashrc \
+    && rosdep update
+
+# build catkin_ws
+RUN cd /home/ros/Workspace/tiago_public_ws \
+    && catkin init && catkin clean \
+    && catkin config --extend /opt/ros/indigo \
+    \
+    # add '-r' option to continue installing despite errors: no package [pmb2_2dnav_gazebo]
+    && sudo rosdep install --from-paths src --ignore-src --rosdistro indigo -y -r --skip-keys="opencv2 opencv2-nonfree pal_laser_filters speed_limit sensor_to_cloud"  \
+    && /bin/bash -c "source /opt/ros/indigo/setup.bash" \
+    && catkin build \
+    && sudo chown -R ros:ros /home/ros/Workspace
+
+USER root
+
+# install ros python3 supports
+RUN aptitude install -y -q -R python3-dev libyaml-0-2 libyaml-dev libyaml-cpp0.5 libyaml-cpp-dev && pip3 install --upgrade pip transforms3d defusedxml
+
+# install catkin-tools dependencies
+RUN pip2 install trollius
+
+# aptitude clean
+RUN apt-get autoclean \
+    && apt-get clean all \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /tmp/* /var/tmp/*
+
+# cd /home/ros default
+WORKDIR /home/ros
+
+# must run /sbin/my_init with root user
+ENTRYPOINT ["/sbin/my_init", "--quiet", "--", "setuser", "ros", "/ros_entrypoint.sh"]
+CMD ["bash"]
+
+
+
